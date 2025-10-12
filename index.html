@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Twitch Poll Creator</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 20px;
+      }
+      h1 {
+        margin-bottom: 10px;
+      }
+      input, button {
+        margin: 5px 0;
+        padding: 8px;
+        font-size: 14px;
+      }
+      .choice-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #choices {
+        margin-top: 10px;
+        margin-bottom: 10px;
+      }
+      button {
+        cursor: pointer;
+      }
+      #output {
+        background: #f0f0f0;
+        padding: 10px;
+        border-radius: 6px;
+        white-space: pre-wrap;
+      }
+      .edit-choice-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+  padding: 4px 6px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  background: #f9f9f9;
+  cursor: grab;
+}
+.edit-choice-row:active {
+  cursor: grabbing;
+}
+.drag-handle {
+  font-size: 18px;
+  cursor: grab;
+  user-select: none;
+}
+.saved-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #f9f9f9;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  cursor: grab;
+}
+.saved-item:active {
+  cursor: grabbing;
+}
+.drag-handle {
+  font-size: 18px;
+  cursor: grab;
+  margin-right: 8px;
+}
+.buttons button {
+  margin-left: 4px;
+}
+    </style>
+  </head>
+  <body>
+    <h1>Twitch Poll Creator</h1>
+    <div>
+      <button id="login">Login with Twitch</button>
+      <button id="logout" disabled>Logout</button>
+    </div>
+
+    <hr>
+
+    <div>
+          <label>Type:</label>
+  <select id="type">
+    <option value="poll">Poll</option>
+    <option value="prediction">Prediction</option>
+  </select>
+<br><br>
+
+      <label>Poll Title:</label><br>
+      <input id="title" placeholder="Poll Title" style="width: 300px;" /><br><br>
+
+      <div id="choices">
+        <label>Choices:</label><br>
+        <div class="choice-row">
+          <input placeholder="Choice 1" class="choice" />
+        </div>
+        <div class="choice-row">
+          <input placeholder="Choice 2" class="choice" />
+        </div>
+      </div>
+      <button id="addChoice">➕ Add Choice</button><br><br>
+
+      <label>Duration (seconds):</label><br>
+      <input id="duration" type="number" min="15" max="1800" value="60" /><br><br>
+
+<button id="create" disabled>Create</button>
+<button id="save">💾 Save</button>
+
+<hr>
+<h2>Saved Polls & Predictions</h2>
+<ul id="savedList" style="list-style: none; padding: 0; margin: 0;"></ul>
+    </div>
+
+    <hr>
+<pre id="output" style="white-space: pre-wrap;">🔄 Checking login...</pre>
+
+<!-- Edit Modal -->
+<div id="editModal" style="
+  display: none;
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: rgba(0,0,0,0.6);
+  justify-content: center;
+  align-items: center;
+">
+  <div style="background: #fff; padding: 20px; border-radius: 10px; width: 400px;">
+    <h3>Edit Saved Engagement</h3>
+    <label>Type:</label>
+    <select id="editType">
+      <option value="poll">Poll</option>
+      <option value="prediction">Prediction</option>
+    </select><br><br>
+
+    <label>Title:</label><br>
+    <input id="editTitle" style="width: 100%;" /><br><br>
+
+    <label>Choices:</label>
+    <div id="editChoices"></div>
+    <button id="addEditChoice">➕ Add Choice</button><br><br>
+
+    <label>Duration (seconds):</label><br>
+    <input id="editDuration" type="number" min="15" max="1800" /><br><br>
+
+    <button id="saveEdit">💾 Save Changes</button>
+    <button id="cancelEdit">❌ Cancel</button>
+  </div>
+</div>
+
+<script>
+  const output = document.getElementById('output');
+  const createBtn = document.getElementById('create');
+
+  function setOutput(message, type = 'info') {
+    const color = {
+      info: '#444',
+      success: 'green',
+      error: 'red',
+      loading: '#555',
+    }[type];
+    output.style.color = color;
+    output.textContent = message;
+  }
+
+  async function updateUI() {
+    const loggedIn = await window.twitchAPI.isLoggedIn();
+    document.getElementById('login').disabled = loggedIn;
+    document.getElementById('logout').disabled = !loggedIn;
+    createBtn.disabled = !loggedIn;
+    setOutput(loggedIn ? '✅ Logged in to Twitch.' : '🔒 Not logged in.');
+  }
+
+  document.getElementById('login').addEventListener('click', async () => {
+    await window.twitchAPI.auth();
+    setTimeout(updateUI, 2000);
+  });
+
+  document.getElementById('logout').addEventListener('click', async () => {
+    await window.twitchAPI.logout();
+    await updateUI();
+  });
+
+  // Add choice button stays the same...
+      document.getElementById('addChoice').addEventListener('click', () => {
+        const choicesDiv = document.getElementById('choices');
+        const count = choicesDiv.querySelectorAll('.choice').length + 1;
+
+        const newChoice = document.createElement('div');
+        newChoice.classList.add('choice-row');
+        newChoice.innerHTML = `
+          <input placeholder="Choice ${count}" class="choice" />
+          <button class="removeChoice">❌</button>
+        `;
+
+        // remove choice handler
+        newChoice.querySelector('.removeChoice').addEventListener('click', () => {
+          newChoice.remove();
+        });
+
+        choicesDiv.appendChild(newChoice);
+      });
+
+document.getElementById('create').addEventListener('click', async () => {
+  const type = document.getElementById('type').value; // 👈 poll or prediction
+  const title = document.getElementById('title').value.trim();
+  const duration = parseInt(document.getElementById('duration').value, 10);
+
+  const choiceInputs = Array.from(document.querySelectorAll('.choice'));
+  const choices = choiceInputs
+    .map(input => input.value.trim())
+    .filter(val => val.length > 0)
+    .map(val => ({ title: val }));
+
+  if (!title || choices.length < 2) {
+    setOutput('⚠️ You need a title and at least 2 choices.', 'error');
+    return;
+  }
+
+  try {
+    setOutput(`⏳ Creating ${type}...`, 'loading');
+    createBtn.disabled = true;
+
+    const data = await window.twitchAPI.createEngagement({
+      type,
+      title,
+      choices,
+      duration
+    });
+
+    if (data.error) {
+      setOutput(`❌ ${data.error}`, 'error');
+    } else {
+      const item = data.data[0];
+      setOutput(`✅ ${type.charAt(0).toUpperCase() + type.slice(1)} created!\nID: ${item.id}`, 'success');
+
+      // You could trigger result fetching for polls/predictions separately
+      if (type === 'poll') {
+        await pollResultLoop(item.id, duration);
+      } else {
+        await predictionResultLoop(item.id, duration);
+      }
+    }
+  } catch (err) {
+    setOutput(`❌ Error: ${err.message}`, 'error');
+  } finally {
+    createBtn.disabled = false;
+  }
+});
+
+  async function pollResultLoop(pollId, duration) {
+    const endTime = Date.now() + duration * 1000;
+
+    while (Date.now() < endTime) {
+      const result = await window.twitchAPI.getPollResults(pollId);
+      if (result?.data?.length) {
+        const poll = result.data[0];
+        const summary = poll.choices
+          .map(c => `${c.title}: ${c.votes} votes`)
+          .join('\n');
+        setOutput(`📊 Poll results:\n${summary}`);
+      }
+      await new Promise(r => setTimeout(r, 5000)); // refresh every 5 seconds
+    }
+
+    // Final fetch
+    const final = await window.twitchAPI.getPollResults(pollId);
+    if (final?.data?.length) {
+      const poll = final.data[0];
+      const summary = poll.choices
+        .map(c => `${c.title}: ${c.votes} votes`)
+        .join('\n');
+      setOutput(`🏁 Final results:\n${summary}`, 'success');
+    } else {
+      setOutput('⚠️ Could not retrieve final results.', 'error');
+    }
+  }
+
+async function predictionResultLoop(predictionId, duration) {
+  const endTime = Date.now() + duration * 1000;
+  let controlsAdded = false;
+  let resolved = false;
+
+  while (!resolved) {
+    const result = await window.twitchAPI.getPredictionResults(predictionId);
+    if (result?.data?.length) {
+      const pred = result.data[0];
+
+      let summary = `🎯 Prediction: ${pred.title}\nStatus: ${pred.status}\n\n`;
+      pred.outcomes.forEach((o, i) => {
+        summary += `${i + 1}. ${o.title} — ${o.users || 0} users (${o.channel_points || 0} pts)\n`;
+      });
+
+      setOutput(summary);
+
+      // 🧩 Add controls *after* betting time ends, and only once
+      if (!controlsAdded && pred.status === 'LOCKED') {
+        controlsAdded = true;
+
+        const outputDiv = document.getElementById('output');
+        const controlDiv = document.createElement('div');
+        controlDiv.id = 'prediction-controls';
+        controlDiv.innerHTML = `
+          <p><b>Choose the winning outcome:</b></p>
+          ${pred.outcomes.map((o, i) => `<button data-id="${o.id}">🏆 ${o.title}</button>`).join('')}
+          <button id="cancelPred">❌ Cancel Prediction</button>
+        `;
+
+        const existing = document.getElementById('prediction-controls');
+        if (existing) existing.remove();
+        outputDiv.appendChild(controlDiv);
+
+        // Add listeners
+        controlDiv.querySelectorAll('button[data-id]').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            setOutput(`⏳ Resolving prediction...`, 'loading');
+            const outcomeId = btn.dataset.id;
+            const result = await window.twitchAPI.resolvePrediction({
+              predictionId,
+              outcomeId,
+              action: 'resolve',
+            });
+            if (result.error) setOutput(`❌ ${result.error}`, 'error');
+            else {
+              setOutput(`🏁 Prediction resolved: ${btn.textContent}`, 'success');
+              resolved = true;
+              controlDiv.remove();
+            }
+          });
+        });
+
+        document.getElementById('cancelPred').addEventListener('click', async () => {
+          setOutput(`⏳ Cancelling prediction...`, 'loading');
+          const result = await window.twitchAPI.resolvePrediction({
+            predictionId,
+            action: 'cancel',
+          });
+          if (result.error) setOutput(`❌ ${result.error}`, 'error');
+          else {
+            setOutput(`🚫 Prediction cancelled.`, 'success');
+            resolved = true;
+            controlDiv.remove();
+          }
+        });
+      }
+
+      // Stop tracking if Twitch says it's resolved/canceled
+      if (['RESOLVED', 'CANCELED'].includes(pred.status)) {
+        resolved = true;
+        const summary = pred.outcomes
+          .map(o => `${o.title}: ${o.users || 0} users (${o.channel_points || 0} pts)`)
+          .join('\n');
+        setOutput(`🏁 Final prediction results:\n${summary}`, 'success');
+      }
+    }
+
+    await new Promise(r => setTimeout(r, 5000));
+  }
+}
+
+  updateUI();
+
+  const savedList = document.getElementById('savedList');
+
+async function refreshSaved() {
+  const savedList = document.getElementById('savedList');
+  const data = await window.twitchAPI.getSavedEngagements();
+
+  savedList.innerHTML = '';
+
+  data.forEach(e => {
+    const li = document.createElement('li');
+    li.className = 'saved-item';
+    li.draggable = true;
+    li.dataset.id = e.id;
+
+    li.innerHTML = `
+      <span class="drag-handle">☰</span>
+      <b>[${e.type}]</b> ${e.title} (${e.choices.length} choices, ${e.duration}s)
+      <div class="buttons">
+        <button class="launch">🚀 Launch</button>
+        <button class="edit">✏️ Edit</button>
+        <button class="delete">🗑️ Delete</button>
+      </div>
+    `;
+
+    li.querySelector('.launch').addEventListener('click', async () => {
+      setOutput(`⏳ Launching saved ${e.type}: ${e.title}`, 'loading');
+      const result = await window.twitchAPI.createEngagement(e);
+      if (result.error) return setOutput(`❌ ${result.error}`, 'error');
+      const created = result.data?.[0];
+      if (!created) return setOutput('❌ Twitch returned no data.', 'error');
+      setOutput(`✅ ${e.type} launched!`, 'success');
+      if (e.type === 'poll') await pollResultLoop(created.id, e.duration);
+      else await predictionResultLoop(created.id, e.duration);
+    });
+
+    li.querySelector('.edit').addEventListener('click', () => openEditModal(e));
+
+    li.querySelector('.delete').addEventListener('click', async () => {
+      await window.twitchAPI.deleteEngagement(e.id);
+      await refreshSaved();
+    });
+
+    savedList.appendChild(li);
+  });
+
+  enableSavedListDrag(savedList, data);
+}
+
+function enableSavedListDrag(container, data) {
+  let dragged = null;
+
+  container.querySelectorAll('.saved-item').forEach(item => {
+    item.addEventListener('dragstart', e => {
+      dragged = item;
+      item.style.opacity = '0.5';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+
+    item.addEventListener('dragend', () => {
+      item.style.opacity = '';
+      dragged = null;
+    });
+
+    item.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const bounding = item.getBoundingClientRect();
+      const offset = e.clientY - bounding.top;
+      const height = bounding.height / 2;
+      const parent = container;
+
+      if (offset > height) parent.insertBefore(dragged, item.nextSibling);
+      else parent.insertBefore(dragged, item);
+    });
+  });
+
+  // When user drops, persist new order
+  container.addEventListener('drop', async () => {
+    const newOrderIds = Array.from(container.children).map(li => li.dataset.id);
+    await window.twitchAPI.reorderEngagements(newOrderIds);
+  });
+}
+
+// Save the current configuration
+document.getElementById('save').addEventListener('click', async () => {
+  const type = document.getElementById('type').value;
+  const title = document.getElementById('title').value.trim();
+  const duration = parseInt(document.getElementById('duration').value, 10);
+  const choices = Array.from(document.querySelectorAll('.choice'))
+    .map(i => i.value.trim())
+    .filter(Boolean)
+    .map(val => ({ title: val }));
+
+  if (!title || choices.length < 2) {
+    setOutput('⚠️ Need a title and at least 2 choices.', 'error');
+    return;
+  }
+
+  await window.twitchAPI.saveEngagement({ type, title, choices, duration });
+  setOutput(`💾 Saved ${type}: ${title}`, 'success');
+  await refreshSaved();
+});
+
+const editModal = document.getElementById('editModal');
+const editType = document.getElementById('editType');
+const editTitle = document.getElementById('editTitle');
+const editDuration = document.getElementById('editDuration');
+const editChoicesContainer = document.getElementById('editChoices');
+const addEditChoice = document.getElementById('addEditChoice');
+const saveEdit = document.getElementById('saveEdit');
+const cancelEdit = document.getElementById('cancelEdit');
+
+let currentEditId = null;
+
+function openEditModal(engagement) {
+  currentEditId = engagement.id;
+  editModal.style.display = 'flex';
+  editType.value = engagement.type;
+  editTitle.value = engagement.title;
+  editDuration.value = engagement.duration;
+  renderEditChoices(engagement.choices);
+}
+
+function closeEditModal() {
+  editModal.style.display = 'none';
+  currentEditId = null;
+}
+
+function renderEditChoices(choices) {
+  editChoicesContainer.innerHTML = '';
+
+  choices.forEach((choice, index) => {
+    const div = document.createElement('div');
+    div.className = 'edit-choice-row';
+    div.draggable = true;
+    div.dataset.index = index;
+    div.innerHTML = `
+      <span class="drag-handle">☰</span>
+      <input value="${choice.title}" class="edit-choice" style="width:70%;" />
+      <button class="remove-choice">🗑️</button>
+    `;
+
+    div.querySelector('.remove-choice').addEventListener('click', () => div.remove());
+    editChoicesContainer.appendChild(div);
+  });
+
+  enableDragAndDrop();
+}
+
+addEditChoice.addEventListener('click', () => {
+  const div = document.createElement('div');
+  div.innerHTML = `
+    <input placeholder="New choice" class="edit-choice" style="width: 80%;" />
+    <button class="remove-choice">🗑️</button>
+  `;
+  div.querySelector('.remove-choice').addEventListener('click', () => {
+    div.remove();
+  });
+  editChoicesContainer.appendChild(div);
+});
+
+cancelEdit.addEventListener('click', closeEditModal);
+
+saveEdit.addEventListener('click', async () => {
+  const choices = Array.from(document.querySelectorAll('.edit-choice'))
+    .map(input => input.value.trim())
+    .filter(Boolean)
+    .map(title => ({ title }));
+
+  const updated = {
+    id: currentEditId,
+    type: editType.value,
+    title: editTitle.value.trim(),
+    duration: parseInt(editDuration.value, 10),
+    choices,
+  };
+
+  if (!updated.title || updated.choices.length < 2) {
+    setOutput('⚠️ Need a title and at least 2 choices.', 'error');
+    return;
+  }
+
+  await window.twitchAPI.updateEngagement(updated);
+  setOutput(`✅ Updated ${updated.type}: ${updated.title}`, 'success');
+  closeEditModal();
+  await refreshSaved();
+});
+
+refreshSaved();
+
+function enableDragAndDrop() {
+  const rows = editChoicesContainer.querySelectorAll('.edit-choice-row');
+  let dragged = null;
+
+  rows.forEach(row => {
+    row.addEventListener('dragstart', e => {
+      dragged = row;
+      row.style.opacity = '0.5';
+      e.dataTransfer.effectAllowed = 'move';
+    });
+
+    row.addEventListener('dragend', () => {
+      row.style.opacity = '';
+      dragged = null;
+    });
+
+    row.addEventListener('dragover', e => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const bounding = row.getBoundingClientRect();
+      const offset = e.clientY - bounding.top;
+      const height = bounding.height / 2;
+      const parent = editChoicesContainer;
+
+      if (offset > height) parent.insertBefore(dragged, row.nextSibling);
+      else parent.insertBefore(dragged, row);
+    });
+  });
+}
+
+
+</script>
+  </body>
+</html>
