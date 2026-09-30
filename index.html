@@ -178,8 +178,16 @@
   }
 
   document.getElementById('login').addEventListener('click', async () => {
-    await window.twitchAPI.auth();
-    setTimeout(updateUI, 2000);
+    const loginBtn = document.getElementById('login');
+    loginBtn.disabled = true;
+    setOutput('🌐 Approve the login in your browser...', 'loading');
+    const result = await window.twitchAPI.auth();
+    if (result && !result.success) {
+      loginBtn.disabled = false;
+      setOutput(`❌ Login failed: ${result.error}`, 'error');
+      return;
+    }
+    await updateUI();
   });
 
   document.getElementById('logout').addEventListener('click', async () => {

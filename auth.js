@@ -1,17 +1,15 @@
-const express = require('express');
 const open = require('open').default;
 const axios = require('axios');
 const keytar = require('keytar');
-require('dotenv').config();
-
-const app = express();
-const port = 3000;
+const { TWITCH_CLIENT_ID } = require('./config');
 
 const SERVICE_NAME = 'twitch-electron';
 const ACCOUNT_NAME = 'twitch-user';
+const SCOPES = 'channel:manage:polls channel:manage:predictions';
 
 let accessToken = null;
 let refreshToken = null;
+let pendingAuth = null;
 
 /**
  * Load tokens from system keychain
@@ -46,7 +44,17 @@ async function saveToken({ access_token, refresh_token }) {
 }
 
 /**
- * Refresh token when expired
+ * POST a form-encoded request to the Twitch OAuth endpoints
+ */
+function postForm(url, fields) {
+  return axios.post(url, new URLSearchParams(fields).toString(), {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+}
+
+/**
+ * Refresh token when expired.
+ * Public clients refresh without a secret; each refresh token can only be used once.
  */
 async function refreshAccessToken() {
   if (!refreshToken) {
@@ -56,18 +64,11 @@ async function refreshAccessToken() {
 
   console.log('🔄 Refreshing Twitch token...');
   try {
-    const response = await axios.post(
-      'https://id.twitch.tv/oauth2/token',
-      null,
-      {
-        params: {
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-          client_id: process.env.TWITCH_CLIENT_ID,
-          client_secret: process.env.TWITCH_CLIENT_SECRET,
-        },
-      }
-    );
+    const response = await postForm('https://id.twitch.tv/oauth2/token', {
+      client_id: TWITCH_CLIENT_ID,
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+    });
 
     accessToken = response.data.access_token;
     refreshToken = response.data.refresh_token;
@@ -76,65 +77,87 @@ async function refreshAccessToken() {
     return accessToken;
   } catch (err) {
     console.error('❌ Failed to refresh token:', err.response?.data || err.message);
+    // The saved tokens are no longer valid (expired, revoked, or from the old login flow)
+    if (err.response?.status === 400 || err.response?.status === 401) {
+      await logout();
+    }
     return null;
   }
 }
 
-/**
- * Handle Twitch OAuth callback
- */
-app.get('/auth', async (req, res) => {
-  const code = req.query.code;
-  if (!code) return res.send('No code found.');
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  try {
-    const response = await axios.post(
-      'https://id.twitch.tv/oauth2/token',
-      null,
-      {
-        params: {
-          client_id: process.env.TWITCH_CLIENT_ID,
-          client_secret: process.env.TWITCH_CLIENT_SECRET,
-          code,
-          grant_type: 'authorization_code',
-          redirect_uri: 'http://localhost:3000/auth',
-        },
+/**
+ * Twitch Device Code flow: works without a client secret or a local server.
+ * Opens the Twitch activation page (code pre-filled) and waits for the user to approve.
+ */
+async function runDeviceFlow() {
+  const { data: device } = await postForm('https://id.twitch.tv/oauth2/device', {
+    client_id: TWITCH_CLIENT_ID,
+    scopes: SCOPES,
+  });
+
+  console.log(`🔗 Opening ${device.verification_uri} (code: ${device.user_code})`);
+  open(device.verification_uri);
+
+  let interval = (device.interval || 5) * 1000;
+  const deadline = Date.now() + device.expires_in * 1000;
+
+  while (Date.now() < deadline) {
+    await sleep(interval);
+    try {
+      const { data } = await postForm('https://id.twitch.tv/oauth2/token', {
+        client_id: TWITCH_CLIENT_ID,
+        scopes: SCOPES,
+        device_code: device.device_code,
+        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      });
+
+      accessToken = data.access_token;
+      refreshToken = data.refresh_token;
+      await saveToken(data);
+      console.log('✅ Access Token saved securely.');
+      return { success: true };
+    } catch (err) {
+      const message = err.response?.data?.message;
+      if (message === 'authorization_pending') continue;
+      if (message === 'slow_down') {
+        interval += 5000;
+        continue;
       }
-    );
-
-    accessToken = response.data.access_token;
-    refreshToken = response.data.refresh_token;
-    await saveToken(response.data);
-
-    res.send('✅ Authentication successful! You can close this window.');
-    console.log('✅ Access Token saved securely.');
-  } catch (error) {
-    console.error('❌ Error fetching access token:', error.response?.data || error.message);
-    res.send('Error fetching access token');
+      throw err;
+    }
   }
-});
 
-app.listen(port, () => {
-  console.log(`OAuth server running on http://localhost:${port}`);
-});
+  throw new Error('Login timed out. Please try again.');
+}
 
 /**
- * Launch Twitch OAuth flow
+ * Launch Twitch login. Resolves once the user has approved (or it failed).
  */
-function startAuthFlow() {
-  const authUrl = `https://id.twitch.tv/oauth2/authorize?client_id=${process.env.TWITCH_CLIENT_ID}&redirect_uri=http://localhost:3000/auth&response_type=code&scope=channel:manage:polls+channel:manage:predictions`;
-  open(authUrl);
+async function startAuthFlow() {
+  if (!pendingAuth) {
+    pendingAuth = runDeviceFlow()
+      .catch((err) => {
+        const error = err.response?.data?.message || err.message;
+        console.error('❌ Login failed:', err.response?.data || err.message);
+        return { success: false, error };
+      })
+      .finally(() => {
+        pendingAuth = null;
+      });
+  }
+  return pendingAuth;
 }
 
 function getToken() {
   return accessToken;
 }
 
-// Add this function near the bottom of auth.js
 async function logout() {
   try {
-    await keytar.deletePassword('twitch-electron', 'twitch-user-access');
-    await keytar.deletePassword('twitch-electron', 'twitch-user-refresh');
+    await keytar.deletePassword(SERVICE_NAME, `${ACCOUNT_NAME}-access`);
+    await keytar.deletePassword(SERVICE_NAME, `${ACCOUNT_NAME}-refresh`);
     accessToken = null;
     refreshToken = null;
     console.log('🔒 Tokens deleted from keychain.');
@@ -150,15 +173,16 @@ async function isLoggedIn() {
   if (accessToken) return true;
 
   // Otherwise, check if one is stored securely
-  const storedAccess = await keytar.getPassword('twitch-electron', 'twitch-user-access');
+  const storedAccess = await keytar.getPassword(SERVICE_NAME, `${ACCOUNT_NAME}-access`);
   return !!storedAccess;
 }
 
 module.exports = {
+  TWITCH_CLIENT_ID,
   startAuthFlow,
   getToken,
   loadToken,
   refreshAccessToken,
   logout,
-  isLoggedIn, // ✅ add this
+  isLoggedIn,
 };

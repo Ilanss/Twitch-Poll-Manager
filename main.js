@@ -2,8 +2,7 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const axios = require('axios');
-require('dotenv').config();
-const { startAuthFlow, getToken, loadToken, refreshAccessToken, logout } = require('./auth');
+const { TWITCH_CLIENT_ID, startAuthFlow, getToken, loadToken, refreshAccessToken, logout } = require('./auth');
 const dataFile = path.join(app.getPath('userData'), 'savedEngagements.json');
 
 let win;
@@ -24,7 +23,7 @@ async function createWindow() {
 app.whenReady().then(createWindow);
 
 ipcMain.handle('auth', async () => {
-  startAuthFlow();
+  return await startAuthFlow();
 });
 
 ipcMain.handle('createEngagement', async (event, data) => {
@@ -34,7 +33,7 @@ ipcMain.handle('createEngagement', async (event, data) => {
   try {
     const userRes = await axios.get('https://api.twitch.tv/helix/users', {
       headers: {
-        'Client-ID': process.env.TWITCH_CLIENT_ID,
+        'Client-ID': TWITCH_CLIENT_ID,
         Authorization: `Bearer ${token}`,
       },
     });
@@ -63,7 +62,7 @@ ipcMain.handle('createEngagement', async (event, data) => {
 
     const response = await axios.post(url, payload, {
       headers: {
-        'Client-ID': process.env.TWITCH_CLIENT_ID,
+        'Client-ID': TWITCH_CLIENT_ID,
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
@@ -92,7 +91,7 @@ ipcMain.handle('getPollResults', async (event, pollId) => {
   try {
     const userRes = await axios.get('https://api.twitch.tv/helix/users', {
       headers: {
-        'Client-ID': process.env.TWITCH_CLIENT_ID,
+        'Client-ID': TWITCH_CLIENT_ID,
         Authorization: `Bearer ${token}`,
       },
     });
@@ -103,7 +102,7 @@ ipcMain.handle('getPollResults', async (event, pollId) => {
       `https://api.twitch.tv/helix/polls?broadcaster_id=${broadcasterId}&id=${pollId}`,
       {
         headers: {
-          'Client-ID': process.env.TWITCH_CLIENT_ID,
+          'Client-ID': TWITCH_CLIENT_ID,
           Authorization: `Bearer ${token}`,
         },
       }
@@ -123,7 +122,7 @@ ipcMain.handle('getPredictionResults', async (event, predictionId) => {
   try {
     const userRes = await axios.get('https://api.twitch.tv/helix/users', {
       headers: {
-        'Client-ID': process.env.TWITCH_CLIENT_ID,
+        'Client-ID': TWITCH_CLIENT_ID,
         Authorization: `Bearer ${token}`,
       },
     });
@@ -134,7 +133,7 @@ ipcMain.handle('getPredictionResults', async (event, predictionId) => {
       `https://api.twitch.tv/helix/predictions?broadcaster_id=${broadcasterId}&id=${predictionId}`,
       {
         headers: {
-          'Client-ID': process.env.TWITCH_CLIENT_ID,
+          'Client-ID': TWITCH_CLIENT_ID,
           Authorization: `Bearer ${token}`,
         },
       }
@@ -184,7 +183,7 @@ ipcMain.handle('resolvePrediction', async (event, { predictionId, outcomeId, act
   try {
     const userRes = await axios.get('https://api.twitch.tv/helix/users', {
       headers: {
-        'Client-ID': process.env.TWITCH_CLIENT_ID,
+        'Client-ID': TWITCH_CLIENT_ID,
         Authorization: `Bearer ${token}`,
       },
     });
@@ -206,7 +205,7 @@ ipcMain.handle('resolvePrediction', async (event, { predictionId, outcomeId, act
       payload,
       {
         headers: {
-          'Client-ID': process.env.TWITCH_CLIENT_ID,
+          'Client-ID': TWITCH_CLIENT_ID,
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
