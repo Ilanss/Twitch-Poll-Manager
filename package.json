@@ -41,6 +41,9 @@
         "zip"
       ],
       "icon": "assets/icon.icns"
+    },
+    "win": {
+      "icon": "assets/icon.ico"
     }
   }
 }
