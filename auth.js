@@ -1,164 +1,88 @@
-const express = require('express');
-const open = require('open').default;
-const axios = require('axios');
-const keytar = require('keytar');
-require('dotenv').config();
+// auth.js
+const { BrowserWindow, ipcMain, session } = require('electron');
+const fs = require('fs');
+const path = require('path');
 
-const app = express();
-const port = 3000;
+const TOKEN_PATH = path.join(__dirname, 'auth.json');
+const CLIENT_ID = 'YOUR_TWITCH_CLIENT_ID';
+const REDIRECT_URI = 'http://localhost:3000';
+const SCOPES = [
+  'channel:manage:polls',
+  'channel:read:polls',
+  'channel:manage:predictions',
+  'channel:read:predictions',
+  'user:read:email'
+];
 
-const SERVICE_NAME = 'twitch-electron';
-const ACCOUNT_NAME = 'twitch-user';
-
-let accessToken = null;
-let refreshToken = null;
-
-/**
- * Load tokens from system keychain
- */
-async function loadToken() {
-  try {
-    accessToken = await keytar.getPassword(SERVICE_NAME, `${ACCOUNT_NAME}-access`);
-    refreshToken = await keytar.getPassword(SERVICE_NAME, `${ACCOUNT_NAME}-refresh`);
-    if (accessToken) {
-      console.log('🔑 Loaded tokens from keychain');
-    } else {
-      console.log('⚠️ No saved tokens found');
-    }
-  } catch (err) {
-    console.error('❌ Error loading token:', err.message);
-  }
+function saveToken(token) {
+  fs.writeFileSync(TOKEN_PATH, JSON.stringify(token, null, 2));
 }
 
-/**
- * Save tokens to system keychain
- */
-async function saveToken({ access_token, refresh_token }) {
-  try {
-    await keytar.setPassword(SERVICE_NAME, `${ACCOUNT_NAME}-access`, access_token);
-    if (refresh_token) {
-      await keytar.setPassword(SERVICE_NAME, `${ACCOUNT_NAME}-refresh`, refresh_token);
-    }
-    console.log('💾 Tokens saved securely in keychain');
-  } catch (err) {
-    console.error('❌ Error saving token:', err.message);
+function loadToken() {
+  if (fs.existsSync(TOKEN_PATH)) {
+    return JSON.parse(fs.readFileSync(TOKEN_PATH));
   }
+  return null;
 }
 
-/**
- * Refresh token when expired
- */
-async function refreshAccessToken() {
-  if (!refreshToken) {
-    console.log('⚠️ No refresh token available');
-    return null;
-  }
+function clearToken() {
+  if (fs.existsSync(TOKEN_PATH)) fs.unlinkSync(TOKEN_PATH);
+}
 
-  console.log('🔄 Refreshing Twitch token...');
-  try {
-    const response = await axios.post(
-      'https://id.twitch.tv/oauth2/token',
-      null,
-      {
-        params: {
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-          client_id: process.env.TWITCH_CLIENT_ID,
-          client_secret: process.env.TWITCH_CLIENT_SECRET,
-        },
+function getAuthURL() {
+  return `https://id.twitch.tv/oauth2/authorize?client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&response_type=token&scope=${encodeURIComponent(SCOPES.join(' '))}`;
+}
+
+async function startAuthFlow(mainWindow) {
+  return new Promise((resolve, reject) => {
+    const authWindow = new BrowserWindow({
+      width: 500,
+      height: 700,
+      show: true,
+      webPreferences: { nodeIntegration: false }
+    });
+
+    const url = getAuthURL();
+    authWindow.loadURL(url);
+
+    // Intercept the redirect with the token
+    function handleRedirect(details) {
+      const url = details.url;
+      if (url.startsWith(REDIRECT_URI)) {
+        const match = url.match(/access_token=([^&]*)/);
+        if (match && match[1]) {
+          const access_token = match[1];
+          saveToken({ access_token });
+          session.defaultSession.webRequest.onBeforeRequest(null); // cleanup
+          authWindow.close();
+          resolve(access_token);
+        } else {
+          reject(new Error('No token found'));
+        }
       }
-    );
+    }
 
-    accessToken = response.data.access_token;
-    refreshToken = response.data.refresh_token;
-    await saveToken(response.data);
-    console.log('✅ Token refreshed successfully');
-    return accessToken;
-  } catch (err) {
-    console.error('❌ Failed to refresh token:', err.response?.data || err.message);
-    return null;
-  }
+    session.defaultSession.webRequest.onBeforeRequest({ urls: ['http://localhost/*'] }, handleRedirect);
+
+    authWindow.on('closed', () => reject(new Error('User closed window')));
+  });
 }
 
-/**
- * Handle Twitch OAuth callback
- */
-app.get('/auth', async (req, res) => {
-  const code = req.query.code;
-  if (!code) return res.send('No code found.');
-
+ipcMain.handle('auth:login', async (event) => {
   try {
-    const response = await axios.post(
-      'https://id.twitch.tv/oauth2/token',
-      null,
-      {
-        params: {
-          client_id: process.env.TWITCH_CLIENT_ID,
-          client_secret: process.env.TWITCH_CLIENT_SECRET,
-          code,
-          grant_type: 'authorization_code',
-          redirect_uri: 'http://localhost:3000/auth',
-        },
-      }
-    );
-
-    accessToken = response.data.access_token;
-    refreshToken = response.data.refresh_token;
-    await saveToken(response.data);
-
-    res.send('✅ Authentication successful! You can close this window.');
-    console.log('✅ Access Token saved securely.');
-  } catch (error) {
-    console.error('❌ Error fetching access token:', error.response?.data || error.message);
-    res.send('Error fetching access token');
+    const token = loadToken();
+    if (token?.access_token) return token.access_token;
+    const newToken = await startAuthFlow();
+    return newToken;
+  } catch (err) {
+    console.error('Auth error:', err);
+    return null;
   }
 });
 
-app.listen(port, () => {
-  console.log(`OAuth server running on http://localhost:${port}`);
+ipcMain.handle('auth:logout', async () => {
+  clearToken();
+  return true;
 });
 
-/**
- * Launch Twitch OAuth flow
- */
-function startAuthFlow() {
-  const authUrl = `https://id.twitch.tv/oauth2/authorize?client_id=${process.env.TWITCH_CLIENT_ID}&redirect_uri=http://localhost:3000/auth&response_type=code&scope=channel:manage:polls+channel:manage:predictions`;
-  open(authUrl);
-}
-
-function getToken() {
-  return accessToken;
-}
-
-// Add this function near the bottom of auth.js
-async function logout() {
-  try {
-    await keytar.deletePassword('twitch-electron', 'twitch-user-access');
-    await keytar.deletePassword('twitch-electron', 'twitch-user-refresh');
-    accessToken = null;
-    refreshToken = null;
-    console.log('🔒 Tokens deleted from keychain.');
-    return { success: true };
-  } catch (err) {
-    console.error('❌ Error deleting tokens:', err.message);
-    return { success: false, error: err.message };
-  }
-}
-
-async function isLoggedIn() {
-  // If token already loaded in memory
-  if (accessToken) return true;
-
-  // Otherwise, check if one is stored securely
-  const storedAccess = await keytar.getPassword('twitch-electron', 'twitch-user-access');
-  return !!storedAccess;
-}
-
-module.exports = {
-  startAuthFlow,
-  getToken,
-  loadToken,
-  refreshAccessToken,
-  logout,
-  isLoggedIn, // ✅ add this
-};
+module.exports = { loadToken };
